@@ -1,0 +1,15 @@
+[package]
+name = "account_name_similarity"
+version = "0.1.0"
+authors = ["Administrator <dontbeproud@foxmail.com>"]
+edition = "2018"
+license = "MIT"
+description = "Calculate the similarity between account names."
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+str_sim = "0.1.0"   #https://github.com/DontBeProud/str_sim
+itertools = "0.9"
+lazy_static = "1.4.0"
+crossbeam = "0.8"
