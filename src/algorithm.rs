@@ -87,8 +87,6 @@ fn calc_similarity_score_between_vvecs(vec_a: &Vec<Vec<i64>>, vec_b: &Vec<Vec<i6
     let mut score = 0.0000000000001;
     let iter_times = cmp::min(vec_a.len(), vec_b.len());
     for index in 0..iter_times{
-        let aaa = calc_similarity_between_i64vecs(&vec_a[index], &vec_b[index]);
-        let bbb: f64= ((vec_a[index].len() + vec_b[index].len()) / 2).pow(2) as f64;
         score += calc_similarity_between_i64vecs(&vec_a[index], &vec_b[index]) * ((vec_a[index].len() + vec_b[index].len()) / 2).pow(2) as f64;
     }
     score
@@ -98,9 +96,6 @@ fn calc_similarity_score_between_vvecs(vec_a: &Vec<Vec<i64>>, vec_b: &Vec<Vec<i6
 // 计算两个Vec<i64> vec之间的相似度分数
 // 传入&Vec<&Vec<i64>>，若需要计算字符串之间的相似度，则需要逐字符转换成ASCII码，并生成Vec<i64>数据列作为参数传入
 pub fn calc_similarity_between_vvecs(vec_a: &Vec<Vec<i64>>, vec_b: &Vec<Vec<i64>>) -> f64 {
-    let a = calc_similarity_score_between_vvecs(vec_a, vec_b);
-    let b = calc_similarity_score_between_vvecs(vec_a, vec_a);
-    let c = calc_similarity_score_between_vvecs(vec_b, vec_b);
     calc_similarity_score_between_vvecs(vec_a, vec_b) * 2.0 /
         (calc_similarity_score_between_vvecs(vec_a, vec_a) + calc_similarity_score_between_vvecs(vec_b, vec_b))
 }
@@ -122,9 +117,6 @@ pub fn split_account_name_by_data_type(account_name: &str) -> (Vec<Vec<i64>>, Ve
         }
 
         if '0' <= tmp_vec[0] && tmp_vec[0] <= '9'{
-            // let tmp_str: String = tmp_vec.iter().collect();
-            // println!("{:?}", tmp_vec);
-            // res_item_list.push(vec![tmp_str.parse::<i64>().unwrap()]);
             res_skeleton_style.push('i' as i64);
         }
         else {

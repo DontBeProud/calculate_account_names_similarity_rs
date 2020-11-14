@@ -13,3 +13,4 @@ str_sim = "0.1.0"   #https://github.com/DontBeProud/str_sim
 itertools = "0.9"
 lazy_static = "1.4.0"
 crossbeam = "0.8"
+asciis = "0.1.3"

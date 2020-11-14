@@ -1,11 +1,10 @@
-#[macro_use]
 use lazy_static::lazy_static;
 use crate::algorithm::{calc_edit_distance, calc_jaro_winkler_distance, calc_similarity_between_digits,
                        calc_similarity_between_i64vecs, calc_similarity_between_vvecs, split_account_name_by_data_type};
 
 // 相似度细节
 #[derive(Debug)]
-pub struct CAccountNameSimDetail{
+pub struct CAccountNameSimResultDetail{
     pub sim_total_score: f64,
     pub sim_score: f64,
     pub sim_jaro_distance: f64,
@@ -27,6 +26,7 @@ pub struct CAccountNameSimAnalyseParamsWeightTable{
 }
 
 // 对相似度量化计算的封装
+#[derive(Debug)]
 pub struct CAccountNameSimAnalyse<'a>{
     pub account_name: &'a str,
     pub length: i64,
@@ -48,9 +48,9 @@ lazy_static! {
     };
 }
 
-impl Default for CAccountNameSimDetail {
+impl Default for CAccountNameSimResultDetail {
     fn default() -> Self {
-        CAccountNameSimDetail {
+        CAccountNameSimResultDetail {
             sim_total_score: 0.0,
             sim_score: 0.0,
             sim_jaro_distance: 0.0,
@@ -117,9 +117,9 @@ impl<'a> CAccountNameSimAnalyse<'a>{
     // 计算两个账号名称的相似度（需要传入参数权重表）
     fn calc_similarity_by_specify_param_weights(&self,
                                                 obj_to_cmp: &CAccountNameSimAnalyse,
-                                                weight_table: &CAccountNameSimAnalyseParamsWeightTable) -> (f64, CAccountNameSimDetail){
+                                                weight_table: &CAccountNameSimAnalyseParamsWeightTable) -> (f64, CAccountNameSimResultDetail){
 
-        let mut ret_detail: CAccountNameSimDetail = Default::default();
+        let mut ret_detail: CAccountNameSimResultDetail = Default::default();
 
         ret_detail.sim_length = self.analyze_similarity_length(obj_to_cmp.length);
         ret_detail.sim_item_amount = self.analyze_similarity_item_amount(obj_to_cmp.item_amount);
@@ -145,7 +145,7 @@ impl<'a> CAccountNameSimAnalyse<'a>{
     }
 
     // 计算两个账号名称的相似度
-    fn calc_similarity(&self, obj_to_cmp: &CAccountNameSimAnalyse) -> (f64, CAccountNameSimDetail){
+    fn calc_similarity(&self, obj_to_cmp: &CAccountNameSimAnalyse) -> (f64, CAccountNameSimResultDetail){
         self.calc_similarity_by_specify_param_weights(obj_to_cmp, &*DEFAULT_PARAMETER_WEIGHT_TABLE)
     }
 }
@@ -159,5 +159,7 @@ mod tests {
         assert_eq!(CAccountNameSimAnalyse::new("u0j2e9u1s2h8l91").analyze_similarity_item_list(&CAccountNameSimAnalyse::new("t9x1h8y0b7g6f42").item_list), 0.23419743655039468);
         assert_eq!(CAccountNameSimAnalyse::new("u0j2e9u1s2h8l91").calc_similarity(&CAccountNameSimAnalyse::new("t9x1h8y0b7g6f42")).0, 0.6072663004595803);
         println!("{:?}", CAccountNameSimAnalyse::new("u0j2e9u1s2h8l91").calc_similarity(&CAccountNameSimAnalyse::new("t9x1h8y0b7g6f42")));
+        println!("{:?}", CAccountNameSimAnalyse::new("33xwb656").calc_similarity(&CAccountNameSimAnalyse::new("33xwb778")));
+        println!("{:?}", CAccountNameSimAnalyse::new("u0j2e9u1s2h8l91"));
     }
 }
