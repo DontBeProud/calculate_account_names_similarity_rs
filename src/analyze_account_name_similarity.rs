@@ -35,6 +35,18 @@ pub struct CAccountNameSimAnalyse<'a>{
     pub skeleton_style: Vec<i64>,
     pub skeleton_part_size_list: Vec<i64>
 }
+impl Clone for CAccountNameSimAnalyse<'_> {
+    fn clone(&self) -> Self {
+        CAccountNameSimAnalyse {
+            account_name: self.account_name,
+            length: self.length,
+            item_list: self.item_list.clone(),
+            item_amount: self.item_amount,
+            skeleton_style: self.skeleton_style.clone(),
+            skeleton_part_size_list: self.skeleton_part_size_list.clone()
+        }
+    }
+}
 
 // 默认参数权重表
 lazy_static! {
@@ -67,7 +79,7 @@ impl Default for CAccountNameSimResultDetail {
 impl<'a> CAccountNameSimAnalyse<'a>{
 
     // init
-    pub fn new(_account_name: &'a str) ->CAccountNameSimAnalyse{
+    pub fn new(_account_name: &'a str) -> CAccountNameSimAnalyse{
         let split_res = split_account_name_by_data_type(_account_name);
         CAccountNameSimAnalyse{
             account_name: _account_name,
