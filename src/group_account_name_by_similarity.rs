@@ -1,3 +1,4 @@
+extern crate num_cpus;
 use std::collections::HashSet;
 use crate::analyze_account_name_similarity::{CAccountNameSimAnalyse, CAccountNameSimResultDetail};
 use std::cmp::min;
@@ -106,7 +107,7 @@ mod tests {
         for i in tmp.split_data_vec_by_granularity(2){
             println!("{:?}", i);
         }
-
+        print!("{}", num_cpus::get());
 
     }
 }

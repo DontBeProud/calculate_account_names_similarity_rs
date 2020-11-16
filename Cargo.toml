@@ -1,7 +1,7 @@
 [package]
 name = "account_name_similarity"
 version = "0.1.0"
-authors = ["Administrator <dontbeproud@foxmail.com>"]
+authors = ["DontBeProud丶 <dontbeproud@foxmail.com>"]
 edition = "2018"
 license = "MIT"
 description = "Calculate the similarity between account names."
@@ -14,3 +14,4 @@ itertools = "0.9"
 lazy_static = "1.4.0"
 crossbeam = "0.8"
 asciis = "0.1.3"
+num_cpus = "1.0"
