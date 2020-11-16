@@ -62,6 +62,7 @@ impl<'a> CAccountNameAnaVec<'a>{
     // 根据分割粒度将数据分割成若干数据块，并分别交由子线程处理,最后进行数据汇总
     // 设置合理的分割粒度可以在保证准确性的基础上提高运算效率
     pub fn group_account_names_by_similarity(&self, threshold: &CSimilarityGroupingThreshold, group_granularity: usize){
+        let master_accounts_groups_vec = self.split_data_vec_by_granularity(group_granularity);
     }
 
 
@@ -101,9 +102,9 @@ mod tests {
     fn it_works() {
         let vec_obj = vec!["a1f6", "aa11ff66", "b2c", "a1f55", "1"];
         let tmp = CAccountNameAnaVec::new(&vec_obj);
-        // tmp.split_data_vec_by_granularity(1);
-        // for i in tmp.split_data_vec_by_granularity(7){
-        //     println!("{:?}", i);
+        tmp.split_data_vec_by_granularity(1);
+        for i in tmp.split_data_vec_by_granularity(2){
+            println!("{:?}", i);
         }
 
 
