@@ -127,7 +127,7 @@ impl<'a> CAccountNameSimAnalyse<'a>{
     }
 
     // 计算两个账号名称的相似度（需要传入参数权重表）
-    fn calc_similarity_by_specify_param_weights(&self,
+    pub fn calc_similarity_by_specify_param_weights(&self,
                                                 obj_to_cmp: &CAccountNameSimAnalyse,
                                                 weight_table: &CAccountNameSimAnalyseParamsWeightTable) -> (f64, CAccountNameSimResultDetail){
 
@@ -157,7 +157,7 @@ impl<'a> CAccountNameSimAnalyse<'a>{
     }
 
     // 计算两个账号名称的相似度
-    fn calc_similarity(&self, obj_to_cmp: &CAccountNameSimAnalyse) -> (f64, CAccountNameSimResultDetail){
+    pub fn calc_similarity(&self, obj_to_cmp: &CAccountNameSimAnalyse) -> (f64, CAccountNameSimResultDetail){
         self.calc_similarity_by_specify_param_weights(obj_to_cmp, &*DEFAULT_PARAMETER_WEIGHT_TABLE)
     }
 }
