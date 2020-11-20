@@ -10,13 +10,13 @@ pub struct CSimilarityGroupingThreshold{
     pub threshold_sim: f64,                 // 相似度阈值,高于等于这个阈值则判定两个账号相似,可以被分为一组
     pub threshold_frequency: f64,           // 频率阈值,即某组的成员占所在账号块总帐号(划分后的某一账号块,非所有账号)的比例,数值高低需要根据应用场景决定,过低会影响效率
     pub threshold_integrate: f64,           // 整合阈值,用于将多线程运算的结果整合,此值过高可能导致本应属于一个账号组的账号被划分至多组,过低会导致本应划分为多组的账号被划分入一组
-    pub threshold_group_members: f64        // 组员数量阈值,越低越准确,但是过高会影响运行效率
+    pub threshold_group_members: f64        // 组员数量阈值,越低越准确,但是过高会影响运行效率,暂时保留
 }
 impl CSimilarityGroupingThreshold{
     pub fn default() -> CSimilarityGroupingThreshold{
         CSimilarityGroupingThreshold{
             threshold_sim: 0.856,
-            threshold_frequency: 0.0005,
+            threshold_frequency: 0.0002,
             threshold_integrate: 0.856,
             threshold_group_members: 5.0
         }
@@ -37,14 +37,15 @@ impl CSimilarityGroupingThreshold{
 
 // 效率档位
 #[derive(Clone, Copy)]
-pub enum EfficiencyGear {
-    Normal = 0,
-    Fast = 1,
-    VeryFast = 2
+pub enum EfficiencyMode {
+    Accurately = 0,
+    Normal = 1,
+    Quickly = 2,
+    Rapidly = 3
 }
-impl EfficiencyGear{
-    pub fn default() -> EfficiencyGear{
-        EfficiencyGear::Normal
+impl EfficiencyMode{
+    pub fn default() -> EfficiencyMode{
+        EfficiencyMode::Normal
     }
 }
 
@@ -76,38 +77,45 @@ impl<'a> CAccountNameAnaVec<'a>{
     // efficiency_gear: 效率档位,该值越高,效率越高,但结果会遗漏部分数据
     // 根据分割粒度将数据分割成若干数据块，并分别交由子线程处理,最后进行数据汇总
     // 设置合理的分割粒度可以在保证准确性的基础上提高运算效率
-    pub fn group_account_names_by_similarity(&self, threshold: &CSimilarityGroupingThreshold, group_granularity: usize, efficiency_gear: &EfficiencyGear) -> HashMap<usize, Vec<usize>>{
-        let mut index_result: HashMap<usize, Vec<usize>> = HashMap::new();
-        let master_accounts_groups_vec = self.split_analyse_obj_vec_by_granularity(group_granularity);
-        let thread_num = master_accounts_groups_vec.len();
-        let (s, r) = channel::bounded(thread_num);
-        for i in 0..thread_num{
-            let sc= s.clone();
-            crossbeam::scope(|scope| {
-                scope.spawn(|_|{
-                    sc.send(self.worker_group_and_analyze( &master_accounts_groups_vec[i], threshold, 400, efficiency_gear, true)).unwrap();
-                });
-            }).unwrap();
+    pub fn group_account_names_by_similarity(&self, threshold: &CSimilarityGroupingThreshold, group_granularity: usize, mode: &EfficiencyMode) -> HashMap<usize, Vec<usize>>{
+        self.group_massive_accounts(threshold, group_granularity, mode)
+    }
+
+    // 对大量数据进行分组
+    fn group_massive_accounts(&self, threshold: &CSimilarityGroupingThreshold, group_granularity: usize, mode: &EfficiencyMode) -> HashMap<usize, Vec<usize>>{
+        let index_vec = &(0..self.data_vec_size).collect_vec();
+        let mut b_efficient = false;
+        let mut fn_pointer: fn(&CAccountNameAnaVec<'a>, &Vec<usize>, &CSimilarityGroupingThreshold) -> HashMap<usize, Vec<usize>> = CAccountNameAnaVec::group_accurately;
+        match mode {
+            EfficiencyMode::Accurately => {},
+            EfficiencyMode::Normal     => {b_efficient = true;},
+            EfficiencyMode::Quickly    => {fn_pointer = CAccountNameAnaVec::group_quickly;},
+            EfficiencyMode::Rapidly    => {b_efficient = true; fn_pointer = CAccountNameAnaVec::group_quickly;}
         };
 
-        for _i in 0..thread_num{
-            let mut map_to_integrate = r.recv().unwrap();
-            // >= Fast 效率较高，但会造成一小部分数据的丢失
-            self.filter_low_frequency_data(&mut map_to_integrate, efficiency_gear, EfficiencyGear::Fast, threshold.threshold_frequency);
-            // 数据合并
-            self.integrate_two_group_map(&mut index_result, &map_to_integrate, threshold.threshold_integrate, true);
-        }
-        index_result
+        self.fn_handler_group(index_vec, threshold, group_granularity, b_efficient, true, &fn_pointer)
     }
 
-    fn group_and_analyze(&self, index_list: &Vec<usize>, threshold: &CSimilarityGroupingThreshold) -> HashMap<usize, Vec<usize>>{
-        self.worker_group_and_analyze(index_list, threshold, 400, &EfficiencyGear::Normal, true)
-    }
-    fn group_and_analyze_fast(&self, index_list: &Vec<usize>, threshold: &CSimilarityGroupingThreshold) -> HashMap<usize, Vec<usize>>{
-        self.worker_group_and_analyze(index_list, threshold, 400, &EfficiencyGear::VeryFast, true)
+    // 对少量数据准确分组
+    fn group_accurately(&self, index_list: &Vec<usize>, threshold: &CSimilarityGroupingThreshold) -> HashMap<usize, Vec<usize>>{
+        self.worker_group(index_list, threshold, 400, false, true)
     }
 
-    fn worker_group_and_analyze(&self, index_vec: &Vec<usize>, threshold: &CSimilarityGroupingThreshold, group_granularity: usize, efficiency_gear: &EfficiencyGear, b_recursion: bool) -> HashMap<usize, Vec<usize>>{
+    // 对少量数据快速分组
+    fn group_quickly(&self, index_list: &Vec<usize>, threshold: &CSimilarityGroupingThreshold) -> HashMap<usize, Vec<usize>>{
+        self.worker_group(index_list, threshold, 400, true, true)
+    }
+
+    // 对数据进行分组
+    fn worker_group(&self, index_vec: &Vec<usize>, threshold: &CSimilarityGroupingThreshold, group_granularity: usize, b_efficient: bool, b_recursion: bool) -> HashMap<usize, Vec<usize>>{
+        let fn_pointer: fn(&CAccountNameAnaVec<'a>, &Vec<usize>, &CSimilarityGroupingThreshold) -> HashMap<usize, Vec<usize>> = CAccountNameAnaVec::worker_group_accounts_bottommost;
+        self.fn_handler_group(index_vec, threshold, group_granularity, b_efficient, b_recursion, &fn_pointer)
+    }
+
+    // 传入函数指针,handler内部多线程执行该函数并将结果汇总
+    // 分为快速模式和精准模式,如果需要快速计算,可将b_efficient设置为true,这可能会导致少量数据被遗弃,但在计算大量数据的过程中可以显著提高效率
+    // b_recursion用于退出合并递归,主动调用fn_handler_group时该值均为true
+    fn fn_handler_group(&self, index_vec: &Vec<usize>, threshold: &CSimilarityGroupingThreshold, group_granularity: usize, b_efficient: bool, b_recursion: bool, fn_pointer: &fn(&CAccountNameAnaVec<'a>, &Vec<usize>, &CSimilarityGroupingThreshold) -> HashMap<usize, Vec<usize>>) -> HashMap<usize, Vec<usize>>{
         let mut result: HashMap<usize, Vec<usize>> = HashMap::new();
         let master_accounts_groups_vec = self.split_index_vec_by_granularity(index_vec, group_granularity);
         let thread_num = master_accounts_groups_vec.len();
@@ -116,44 +124,24 @@ impl<'a> CAccountNameAnaVec<'a>{
             let sc= s.clone();
             crossbeam::scope(|scope| {
                 scope.spawn(|_|{
-                    sc.send(self.worker_group_accounts_bottommost(&master_accounts_groups_vec[i], threshold)).unwrap();
+                    sc.send(fn_pointer(&self, &master_accounts_groups_vec[i], threshold)).unwrap();
                 });
             }).unwrap();
         };
 
         for _i in 0..thread_num{
             let mut map_to_integrate = r.recv().unwrap();
-            // Very Fast, 效率高，但会造成部分数据的丢失
-            self.filter_low_frequency_data(&mut map_to_integrate, efficiency_gear, EfficiencyGear::VeryFast, threshold.threshold_frequency / 2.0);
+
+            // Fast, 效率高，但会造成部分数据的丢失
+            if b_efficient{
+                self.filter_low_frequency_data(&mut map_to_integrate, threshold.threshold_frequency);
+            }
+
             // 数据合并
             self.integrate_two_group_map(&mut result, &map_to_integrate, threshold.threshold_integrate, b_recursion);
         }
         result
     }
-
-    // fn group_fn_handler(&self, index_vec: &Vec<usize>, threshold: &CSimilarityGroupingThreshold, group_granularity: usize, efficiency_gear: &EfficiencyGear, b_recursion: bool) -> HashMap<usize, Vec<usize>>{
-    //     let mut result: HashMap<usize, Vec<usize>> = HashMap::new();
-    //     let master_accounts_groups_vec = self.split_index_vec_by_granularity(index_vec, group_granularity);
-    //     let thread_num = master_accounts_groups_vec.len();
-    //     let (s, r) = channel::bounded(thread_num);
-    //     for i in 0..thread_num{
-    //         let sc= s.clone();
-    //         crossbeam::scope(|scope| {
-    //             scope.spawn(|_|{
-    //                 sc.send(self.worker_group_accounts_bottommost(&master_accounts_groups_vec[i], threshold)).unwrap();
-    //             });
-    //         }).unwrap();
-    //     };
-    //
-    //     for _i in 0..thread_num{
-    //         let mut map_to_integrate = r.recv().unwrap();
-    //         // Very Fast, 效率高，但会造成部分数据的丢失
-    //         self.filter_low_frequency_data(&mut map_to_integrate, efficiency_gear, EfficiencyGear::VeryFast, threshold.threshold_frequency / 2.0);
-    //         // 数据合并
-    //         self.integrate_two_group_map(&mut result, &map_to_integrate, threshold.threshold_integrate, b_recursion);
-    //     }
-    //     result
-    // }
 
     // 最底层的工作者线程
     fn worker_group_accounts_bottommost(&self, index_list: &Vec<usize>, threshold: &CSimilarityGroupingThreshold) -> HashMap<usize, Vec<usize>>{
@@ -172,8 +160,8 @@ impl<'a> CAccountNameAnaVec<'a>{
                 dst.entry(*index).or_insert(value.clone());
             }
             // 对组长进行分组
-            let mut leader_vec = dst.keys().into_iter().map(|&x| x).collect_vec();
-            let leader_group = self.worker_group_and_analyze(&leader_vec, &CSimilarityGroupingThreshold::default(), 400, &EfficiencyGear::Normal, false);
+            let leader_vec = dst.keys().into_iter().map(|&x| x).collect_vec();
+            let leader_group = self.worker_group(&leader_vec, &CSimilarityGroupingThreshold::default(), 400, false, false);
 
             // 根据组长的相似度分组情况，将部分组合并。(若两组的组长相似，则两组合并)
             for (leader, member_list) in leader_group.iter(){
@@ -253,9 +241,8 @@ impl<'a> CAccountNameAnaVec<'a>{
         result
     }
 
-    // 根据效率档位过滤部分低频数据
-    fn filter_low_frequency_data(&self, src: &mut HashMap<usize, Vec<usize>>, efficiency_gear: &EfficiencyGear, current_context_gear: EfficiencyGear, threshold_standard: f64){
-        if *efficiency_gear as usize >= current_context_gear as usize {
+    // 过滤部分低频数据
+    fn filter_low_frequency_data(&self, src: &mut HashMap<usize, Vec<usize>>, threshold_standard: f64){
             // 计算总共多少数据成员
             let mut account_total = 0;
             for value in src.values(){
@@ -271,7 +258,6 @@ impl<'a> CAccountNameAnaVec<'a>{
             for i in remove_vec{
                 src.remove(&i);
             }
-        }
     }
 }
 
@@ -286,12 +272,8 @@ mod tests {
     fn it_works() {
         let vec_obj = vec!["a1f6", "aa11ff66", "b2c", "a1f55", "1"];
         let tmp = CAccountNameAnaVec::new(&vec_obj);
-        // tmp.split_data_vec_by_granularity(1);
-        // for i in tmp.split_analyse_obj_vec_by_granularity(4){
-        //     println!("{:?}", i);
-        // }
         println!("{}", num_cpus::get());
-        let _res= tmp.group_account_names_by_similarity(&CSimilarityGroupingThreshold::default(), 3000, &EfficiencyGear::default());
+        let _res= tmp.group_account_names_by_similarity(&CSimilarityGroupingThreshold::default(), 3000, &EfficiencyMode::Accurately);
         for i in _res.keys().into_iter().map(|&x| x).collect_vec(){
             println!("{}-{:?}", i, _res[&i])
         }
