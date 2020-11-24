@@ -9,7 +9,9 @@ use crate::analyze_account_name_similarity::{CAccountNameSimAnalyse};
 // CPU数量
 lazy_static! {
     static ref NUM_OF_CPU_CORES: usize = num_cpus::get();
-    static ref DEFAULT_THREAD_MAX: usize = num_cpus::get() + 1;
+    static ref DEFAULT_THREAD_MAX: usize = *NUM_OF_CPU_CORES + 1;
+    static ref DEFAULT_GROUP_GRANULARITY: usize = (*DEFAULT_THREAD_MAX).pow(2) * 400;
+    static ref DEFAULT_MASSIVE_DATA_THRETHOLD: usize = (*DEFAULT_THREAD_MAX).pow(2) * 600;
 }
 
 
@@ -18,7 +20,7 @@ pub struct CSimilarityGroupingThreshold{
     pub threshold_sim: f64,                 // 相似度阈值,高于等于这个阈值则判定两个账号相似,可以被分为一组
     pub threshold_frequency: f64,           // 频率阈值,即某组的成员占所在账号块总帐号(划分后的某一账号块,非所有账号)的比例,数值高低需要根据应用场景决定,过低会影响效率
     pub threshold_integrate: f64,           // 整合阈值,用于将多线程运算的结果整合,此值过高可能导致本应属于一个账号组的账号被划分至多组,过低会导致本应划分为多组的账号被划分入一组
-    pub threshold_group_members: f64        // 组员数量阈值,过滤掉成员数量较少的组
+    pub threshold_group_members: usize      // 组员数量阈值,过滤掉成员数量较少的组.  例如threshold_group_members=3, 则返回的结果中仅包含组员数大于3的账号组
 }
 impl CSimilarityGroupingThreshold{
     pub fn default() -> CSimilarityGroupingThreshold{
@@ -26,7 +28,7 @@ impl CSimilarityGroupingThreshold{
             threshold_sim: 0.856,
             threshold_frequency: 0.0002,
             threshold_integrate: 0.856,
-            threshold_group_members: 1.0
+            threshold_group_members: 1
         }
     }
     pub fn set_threshold_sim(&mut self, threshold_sim: f64){
@@ -38,7 +40,7 @@ impl CSimilarityGroupingThreshold{
     pub fn set_threshold_integrate(&mut self, threshold_integrate: f64){
         self.threshold_integrate = threshold_integrate;
     }
-    pub fn set_threshold_group_members(&mut self, threshold_group_members: f64){
+    pub fn set_threshold_group_members(&mut self, threshold_group_members: usize){
         self.threshold_group_members = threshold_group_members;
     }
 }
@@ -81,12 +83,25 @@ impl<'a> CAccountNameAnaVec<'a>{
 
     // 基于相似度对账号名称进行分组
     // threshold: 阈值
-    // group_granularity: 分割粒度
-    // efficiency_gear: 效率档位,该值越高,效率越高,但结果会遗漏部分数据
-    // 根据分割粒度将数据分割成若干数据块，并分别交由子线程处理,最后进行数据汇总
-    // 设置合理的分割粒度可以在保证准确性的基础上提高运算效率
-    pub fn group_account_names_by_similarity(&self, threshold: &CSimilarityGroupingThreshold, group_granularity: usize, mode: &EfficiencyMode) -> HashMap<usize, Vec<usize>>{
-        self.group_massive_accounts(threshold, group_granularity, mode)
+    // mode: 效率档位,该值越高,效率越高,但结果会遗漏部分数据
+    pub fn group_account_names_by_similarity(&self, threshold: &CSimilarityGroupingThreshold, mode: &EfficiencyMode) -> HashMap<usize, Vec<String>>{
+        let group_index_map: HashMap<usize, Vec<usize>>;
+
+        // 根据分割粒度将数据分割成若干数据块，并分别交由子线程处理,最后进行数据汇总
+        // 设置合理的分割粒度可以在保证准确性的基础上提高运算效率
+
+        // 数据量较大，需要采用 group_massive_accounts
+        if self.data_vec_size >= *DEFAULT_MASSIVE_DATA_THRETHOLD{
+            group_index_map = self.group_massive_accounts(threshold, *DEFAULT_GROUP_GRANULARITY, mode);
+        }else {
+            // 处理小数据量的账号
+            match mode {
+                EfficiencyMode::Accurately | EfficiencyMode::Normal  => {group_index_map = self.group_accurately(&(0..self.data_vec_size).collect_vec(), threshold);},
+                EfficiencyMode::Quickly    | EfficiencyMode::Rapidly => {group_index_map = self.group_quickly(&(0..self.data_vec_size).collect_vec(), threshold);},
+            };
+        }
+
+        self.generate_group_map_by_index(&group_index_map, threshold.threshold_group_members)
     }
 
     // 对大量数据进行分组
@@ -109,7 +124,7 @@ impl<'a> CAccountNameAnaVec<'a>{
         self.worker_group(index_list, threshold, 400, false, true)
     }
 
-    // 对少量数2020/11/23 9:54:14 已读据快速分组
+    // 对少量数据快速分组
     fn group_quickly(&self, index_list: &Vec<usize>, threshold: &CSimilarityGroupingThreshold) -> HashMap<usize, Vec<usize>>{
         self.worker_group(index_list, threshold, 400, true, true)
     }
@@ -269,6 +284,28 @@ impl<'a> CAccountNameAnaVec<'a>{
         result
     }
 
+    // 生成账号组信息表
+    fn generate_group_map_by_index(&self, index_map: &HashMap<usize, Vec<usize>>, threshold_group_members: usize) -> HashMap<usize, Vec<String>>{
+        let mut group_index: usize = 0;
+        let mut group_map: HashMap<usize, Vec<String>> = HashMap::new();
+        let mut group_vec = index_map.iter().collect_vec();
+        group_vec.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+        for group in group_vec{
+            // 因为前面排过序，所以当遇到组员数量少于阈值的情况直接结束遍历
+            if group.1.len() < threshold_group_members{
+                break;
+            }
+
+            let mut group_detail: Vec<String> = Vec::new();
+            for index in group.1{
+                group_detail.push(self.analyse_obj_vec[*index].account_name.parse().unwrap());
+            }
+            group_map.entry(group_index).or_insert(group_detail);
+            group_index += 1;
+        }
+        group_map
+    }
+
     // 过滤部分低频数据
     fn filter_low_frequency_data(&self, src: &mut HashMap<usize, Vec<usize>>, threshold_standard: f64){
             // 计算总共多少数据成员
@@ -300,11 +337,11 @@ mod tests {
     fn it_works() {
         let vec_obj = vec!["a1f6", "aa11ff66", "b2c", "a1f55", "1"];
         let tmp = CAccountNameAnaVec::new(&vec_obj);
-        // println!("{}", num_cpus::get());
-        let _res= tmp.group_account_names_by_similarity(&CSimilarityGroupingThreshold::default(), 30000, &EfficiencyMode::Accurately);
-        for i in _res.keys().into_iter().map(|&x| x).collect_vec(){
-            println!("{}-{:?}", i, _res[&i])
+        let _res= tmp.group_account_names_by_similarity(&CSimilarityGroupingThreshold::default(), &EfficiencyMode::Accurately);
+        for item in _res.iter(){
+            println!("{}-{:?}", item.0, item.1)
         }
+
         // println!("{}", _res.keys().into_iter().map(|&x| x).collect_vec().len());
 
     }
