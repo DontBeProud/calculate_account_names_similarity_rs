@@ -173,7 +173,7 @@ mod tests {
         println!("{:?}", CAccountNameSimAnalyse::new("u0j2e9u1s2h8l91").calc_similarity(&CAccountNameSimAnalyse::new("t9x1h8y0b7g6f42")));
         println!("{:?}", CAccountNameSimAnalyse::new("33xwb656").calc_similarity(&CAccountNameSimAnalyse::new("33xwb778")));
         println!("{:?}", CAccountNameSimAnalyse::new("u0j2e9u1s2h8l91"));
-        println!("{:?}", CAccountNameSimAnalyse::new("a1f6").calc_similarity(&CAccountNameSimAnalyse::new("a1f55")));
+        println!("{:?}", CAccountNameSimAnalyse::new("ubut2222").calc_similarity(&CAccountNameSimAnalyse::new("ubut1057")));
 
     }
 }
