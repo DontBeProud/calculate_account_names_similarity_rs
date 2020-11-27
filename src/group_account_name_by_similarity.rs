@@ -84,7 +84,7 @@ impl<'a> CAccountNameAnaVec<'a>{
 
         // 数据量较大，需要采用 group_massive_accounts
         if self.data_vec_size >= *DEFAULT_MASSIVE_DATA_THRETHOLD{
-            group_index_map = self.group_massive_accounts(threshold, *DEFAULT_GROUP_GRANULARITY, mode);
+            group_index_map = self.group_massive_accounts(&(0..self.data_vec_size).collect_vec(), threshold, *DEFAULT_GROUP_GRANULARITY, mode);
         }else {
             // 处理小数据量的账号
             match mode {
@@ -97,8 +97,7 @@ impl<'a> CAccountNameAnaVec<'a>{
     }
 
     // 对大量数据进行分组
-    fn group_massive_accounts(&self, threshold: &CSimilarityGroupingThreshold, group_granularity: usize, mode: &EfficiencyMode) -> HashMap<usize, Vec<usize>>{
-        let index_vec = &(0..self.data_vec_size).collect_vec();
+    fn group_massive_accounts(&self, index_vec: &Vec<usize>, threshold: &CSimilarityGroupingThreshold, group_granularity: usize, mode: &EfficiencyMode) -> HashMap<usize, Vec<usize>>{
         let mut b_efficient = false;
         let mut fn_pointer: fn(&CAccountNameAnaVec<'a>, &Vec<usize>, &CSimilarityGroupingThreshold) -> HashMap<usize, Vec<usize>> = CAccountNameAnaVec::group_accurately;
         match mode {
@@ -107,36 +106,40 @@ impl<'a> CAccountNameAnaVec<'a>{
             EfficiencyMode::Quickly    => {fn_pointer = CAccountNameAnaVec::group_quickly;},
             EfficiencyMode::Rapidly    => {b_efficient = true; fn_pointer = CAccountNameAnaVec::group_quickly;}
         };
-
-        self.fn_handler_group(index_vec, threshold, group_granularity, b_efficient, true, &fn_pointer)
+        let account_groups_vec = self.split_index_vec(index_vec, group_granularity);
+        self.fn_handler_group(&account_groups_vec, threshold,  b_efficient, &fn_pointer)
     }
 
     // 对少量数据准确分组
     fn group_accurately(&self, index_list: &Vec<usize>, threshold: &CSimilarityGroupingThreshold) -> HashMap<usize, Vec<usize>>{
-        self.worker_group(index_list, threshold, 400, false, true)
+        self.basic_worker_group(index_list, threshold, 400, false)
     }
 
     // 对少量数据快速分组
     fn group_quickly(&self, index_list: &Vec<usize>, threshold: &CSimilarityGroupingThreshold) -> HashMap<usize, Vec<usize>>{
-        self.worker_group(index_list, threshold, 400, true, true)
+        self.basic_worker_group(index_list, threshold, 400, true)
     }
 
     // 对数据进行分组
-    fn worker_group(&self, index_vec: &Vec<usize>, threshold: &CSimilarityGroupingThreshold, group_granularity: usize, b_efficient: bool, b_recursion: bool) -> HashMap<usize, Vec<usize>>{
+    fn basic_worker_group(&self, index_vec: &Vec<usize>, threshold: &CSimilarityGroupingThreshold, group_granularity: usize, b_efficient: bool) -> HashMap<usize, Vec<usize>>{
         let fn_pointer: fn(&CAccountNameAnaVec<'a>, &Vec<usize>, &CSimilarityGroupingThreshold) -> HashMap<usize, Vec<usize>> = CAccountNameAnaVec::worker_group_accounts_bottommost;
-        self.fn_handler_group(index_vec, threshold, group_granularity, b_efficient, b_recursion, &fn_pointer)
+        let account_groups_vec = self.split_index_vec(index_vec, group_granularity);
+        self.fn_handler_group(&account_groups_vec,
+                              &CSimilarityGroupingThreshold {
+                                  threshold_sim: threshold.threshold_sim,
+                                  threshold_group_members: min(group_granularity / 100, threshold.threshold_group_members) },
+                              b_efficient, &fn_pointer)
     }
 
     // 传入函数指针,handler内部多线程执行该函数并将结果汇总
     // 分为快速模式和精准模式,如果需要快速计算,可将b_efficient设置为true,这可能会导致少量数据被遗弃,但在计算大量数据的过程中可以显著提高效率
     // b_recursion用于退出合并递归,主动调用fn_handler_group时该值均为true
-    fn fn_handler_group(&self, index_vec: &Vec<usize>, threshold: &CSimilarityGroupingThreshold, group_granularity: usize, b_efficient: bool, b_recursion: bool, fn_pointer: &fn(&CAccountNameAnaVec<'a>, &Vec<usize>, &CSimilarityGroupingThreshold) -> HashMap<usize, Vec<usize>>) -> HashMap<usize, Vec<usize>>{
-        let master_accounts_groups_vec = self.split_index_vec_by_granularity(index_vec, group_granularity);
-        let thread_num = master_accounts_groups_vec.len();
+    fn fn_handler_group(&self, account_groups_vec: &Vec<Vec<usize>>, threshold: &CSimilarityGroupingThreshold, b_efficient: bool, fn_pointer: &fn(&CAccountNameAnaVec<'a>, &Vec<usize>, &CSimilarityGroupingThreshold) -> HashMap<usize, Vec<usize>>) -> HashMap<usize, Vec<usize>>{
+        let thread_num = account_groups_vec.len();
 
         // 单线程可处理
         if thread_num == 1{
-            return fn_pointer(&self, &master_accounts_groups_vec[0], threshold);
+            return fn_pointer(&self, &account_groups_vec[0], threshold);
         }
 
         // 需要用到多线程
@@ -148,7 +151,7 @@ impl<'a> CAccountNameAnaVec<'a>{
                 for i in 0..thread_num{
                     crossbeam::scope(|scope| {
                         scope.spawn(|_|{
-                            s.clone().send(fn_pointer(&self, &master_accounts_groups_vec[i].to_vec(), threshold)).unwrap();
+                            s.clone().send(fn_pointer(&self, &account_groups_vec[i].to_vec(), threshold)).unwrap();
                         });
                     }).unwrap();
                 };
@@ -158,22 +161,22 @@ impl<'a> CAccountNameAnaVec<'a>{
             _ => {
                 let pool = rayon::ThreadPoolBuilder::new().num_threads(*DEFAULT_THREAD_MAX).build().unwrap();
                 for i in 0..thread_num{
-                    pool.install(|| s.clone().send(fn_pointer(&self, &master_accounts_groups_vec[i].to_vec(), threshold)).unwrap());
+                    pool.install(|| s.clone().send(fn_pointer(&self, &account_groups_vec[i].to_vec(), threshold)).unwrap());
                 };
             }
         };
 
+
         // 整合数据
         for _i in 0..thread_num{
             let mut map_to_integrate = r.recv().unwrap();
-
             // 优化掉一些低频数据, 效率高，但会造成部分数据的丢失
             if b_efficient{
                 self.filter_low_frequency_data(&mut map_to_integrate, threshold.threshold_group_members);
             }
 
             // 数据合并
-            self.integrate_two_group_map(&mut result, &map_to_integrate, threshold.threshold_sim, b_recursion);
+            self.integrate_two_group_map(&mut result, &map_to_integrate, threshold.threshold_sim);
         }
         result
     }
@@ -188,42 +191,38 @@ impl<'a> CAccountNameAnaVec<'a>{
     }
 
     // 将两个存储账号组信息的map融合
-    fn integrate_two_group_map(&self, dst: &mut HashMap<usize, Vec<usize>>, src: &HashMap<usize, Vec<usize>>, threshold_sim: f64, b_recursion: bool){
-        if b_recursion && (dst.len() + src.len()) > 600{
-            // 合并
-            for (index, value) in src.iter(){
-                dst.entry(*index).or_insert((*value).to_vec());
-            }
-
-            // 对组长进行分组
-            let leader_vec = dst.keys().into_iter().map(|&x| x).collect_vec();
-            let leader_group =
-                self.worker_group(&leader_vec, &CSimilarityGroupingThreshold{threshold_sim, threshold_group_members: 2}, 400, false, false);
-
-            // 根据组长的相似度分组情况，将部分组合并。(若两组的组长相似，则两组合并)
-            for (leader, member_list) in leader_group.iter(){
-                for member_index in member_list{
-                    if *member_index != *leader{
-                        let mut tmp_member_list = dst[member_index].to_vec();
-                        dst.get_mut(leader).unwrap().append(&mut tmp_member_list);
-                        dst.remove(member_index);
-                    }
-                }
-            }
-        }else {
-            self.integrate_two_group_map_normal(dst, src, threshold_sim);
+    fn integrate_two_group_map(&self, dst: &mut HashMap<usize, Vec<usize>>, src: &HashMap<usize, Vec<usize>>, threshold_sim: f64){
+        let thread_num = src.len();
+        if thread_num == 0{
+            return;
         }
-    }
 
-    // 将两个存储账号组信息的map融合,单线程匹配
-    fn integrate_two_group_map_normal(&self, dst: &mut HashMap<usize, Vec<usize>>, src: &HashMap<usize, Vec<usize>>, threshold_sim: f64){
-        for (src_leader, src_group) in src.iter(){
-            let group_leader = self.determine_which_group_the_account_belongs_to(*src_leader, dst, threshold_sim);
-            if group_leader == *src_leader{
-                dst.entry(group_leader).or_insert(src_group.clone());
+        let (s, r) = channel::bounded(thread_num);
+        let origin_dst = dst.clone();
+        match thread_num {
+            thread_num if thread_num <= *DEFAULT_THREAD_MAX =>{
+                for key in src.keys(){
+                    crossbeam::scope(|scope| {
+                        scope.spawn(|_|{
+                            s.clone().send((*key, self.determine_which_group_the_account_belongs_to(*key, &origin_dst, threshold_sim))).unwrap();
+                        });
+                    }).unwrap();
+                };
+            },
+            _ => {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(*DEFAULT_THREAD_MAX).build().unwrap();
+                for key in src.keys(){
+                    pool.install(|| s.clone().send((*key, self.determine_which_group_the_account_belongs_to(*key, &origin_dst, threshold_sim))).unwrap());
+                };
             }
-            else {
-                dst.get_mut(&group_leader).unwrap().append(&mut src_group.clone());
+        }
+
+        for _i in 0..thread_num{
+            let integrate_data = r.recv().unwrap();
+            if integrate_data.0 == integrate_data.1{
+                dst.entry(integrate_data.1).or_insert(src[&integrate_data.0].clone());
+            }else {
+                dst.get_mut(&integrate_data.1).unwrap().append(&mut src.get(&integrate_data.0).unwrap().clone());
             }
         }
     }
@@ -249,6 +248,35 @@ impl<'a> CAccountNameAnaVec<'a>{
             }
         }
         index_to_match
+    }
+
+    // 分割成不同源账号组,用于多线程运算
+    fn split_index_vec(&self, index_vec: &Vec<usize>, group_granularity: usize) -> Vec<Vec<usize>>{
+        let mut result: Vec<Vec<usize>>= Vec::new();
+        let total_size = index_vec.len();
+        if total_size == 0{
+            return result;
+        }
+
+        let mut index_vec_group_by_skeleton: Vec<Vec<usize>> = Vec::new();
+        index_vec_group_by_skeleton.push(vec![index_vec[0]]);
+        for index in 1..index_vec.len(){
+            if &self.analyse_obj_vec[index_vec[index - 1]].skeleton_style == &self.analyse_obj_vec[index_vec[index]].skeleton_style &&
+                &self.analyse_obj_vec[index_vec[index - 1]].skeleton_part_size_list == &self.analyse_obj_vec[index_vec[index]].skeleton_part_size_list
+            {
+                let current_tail_index = index_vec_group_by_skeleton.len() - 1;
+                index_vec_group_by_skeleton.get_mut(current_tail_index).unwrap().push(index_vec[index]);
+            }
+            else {
+                index_vec_group_by_skeleton.push(vec![index_vec[index]]);
+            }
+        }
+        index_vec_group_by_skeleton.sort_by(|a, b| b.len().cmp(&a.len()));
+        for index in 0..index_vec_group_by_skeleton.len(){
+            result.append(&mut self.split_index_vec_by_granularity(&index_vec_group_by_skeleton[index], group_granularity));
+        }
+
+        result
     }
 
     // 根据分组粒度对数据进行分组,返回各组成员的序号
