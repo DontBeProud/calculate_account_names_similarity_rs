@@ -51,12 +51,33 @@ impl EfficiencyMode{
     }
 }
 
-// 用于对账号集合排序/分组
+/// # Description
+/// * CAccountNameAnaVec会帮助你分析账号名集合，并将相似的账号名进行聚类。
+/// * CAccountNameAnaVec will help you analyze the collection of account names and cluster similar account names.
+/// # Function
+/// * CAccountNameAnaVec提供四种分组模式，它们的精准度和运行效率各有不同，您可以根据场景需求选择合适的模式。它们分别是:
+/// * CAccountNameAnaVec provides four grouping modes with different accuracy and operating efficiency. You can choose the appropriate mode according to the needs of the scene. They are:
+///
+///     1.group_by_similarity_accurately
+///
+///     2.group_by_similarity
+///
+///     3.group_by_similarity_quickly
+///
+///     4.group_by_similarity_rapidly
+///
+/// * 从命名上就能很轻易地看出，group_by_similarity_rapidly的运行效率最高，group_by_similarity_accurately的精准度最高。
+/// * 传入的threshold_sim、threshold_group_members两项参数会很大程度影响运行的效率
 pub struct CAccountNameAnaVec<'a>{
     analyse_obj_vec: Vec<CAccountNameSimAnalyse<'a>>,
     data_vec_size: usize,
 }
 impl<'a> CAccountNameAnaVec<'a>{
+
+    /// 这是这个类的初始化函数。传入账号名集合，初始化流程中会使用特定规则会对其进行初步的去重、排序
+    ///
+    /// This is the initialization function of this class.
+    /// You need to pass in a set of account names as parameters, and specific rules will be used in the initialization process to perform preliminary deduplication and sorting
     pub fn new(account_name_vec: &'a Vec<&str>) -> CAccountNameAnaVec<'a> {
         let mut obj_vec: Vec<CAccountNameSimAnalyse<'a>> = Vec::new();
 
@@ -72,16 +93,57 @@ impl<'a> CAccountNameAnaVec<'a>{
         CAccountNameAnaVec{ data_vec_size: obj_vec.len(), analyse_obj_vec: obj_vec}
     }
 
+    /// 返回排序后的账号名集合
+    ///
+    /// Return the sorted account name collection
+    pub fn to_vec(&self) -> Vec<String>{
+        let mut res: Vec<String> = Vec::new();
+        for i in 0..self.data_vec_size{
+            res.push(self.analyse_obj_vec[i].account_name.parse().unwrap());
+        }
+        res
+    }
+
+    /// # 功能
+    /// 以账号之间的相似度作为判断标准对账号集合进行分组，高度相似的账号会被分到一组。
+    ///
+    /// # 参数
+    ///
+    /// # 返回
+    ///
+    ///
+    /// # Function
+    /// This function uses the similarity between accounts as the criterion to group account sets, and highly similar accounts will be grouped together.
+    ///
+    /// 按运行效率排序(Sort by operating efficiency) :
+    ///
+    /// group_by_similarity_accurately < group_by_similarity << group_by_similarity_quickly < group_by_similarity_rapidly
+    ///
+    /// 按结果的精准度排序(Sort by accuracy of results) :
+    ///
+    pub fn group_by_similarity_accurately(&self, threshold_sim: f64, threshold_group_members: usize) -> HashMap<usize, Vec<String>>{
+        self.group_account_names_by_similarity(&mut CSimilarityGroupingThreshold { threshold_sim, threshold_group_members }, &EfficiencyMode::Accurately)
+    }
+    pub fn group_by_similarity(&self, threshold_sim: f64, threshold_group_members: usize) -> HashMap<usize, Vec<String>>{
+        self.group_account_names_by_similarity(&mut CSimilarityGroupingThreshold { threshold_sim, threshold_group_members }, &EfficiencyMode::Normal)
+    }
+    pub fn group_by_similarity_quickly(&self, threshold_sim: f64, threshold_group_members: usize) -> HashMap<usize, Vec<String>>{
+        self.group_account_names_by_similarity(&mut CSimilarityGroupingThreshold { threshold_sim, threshold_group_members }, &EfficiencyMode::Quickly)
+    }
+    pub fn group_by_similarity_rapidly(&self, threshold_sim: f64, threshold_group_members: usize) -> HashMap<usize, Vec<String>>{
+        self.group_account_names_by_similarity(&mut CSimilarityGroupingThreshold { threshold_sim, threshold_group_members }, &EfficiencyMode::Rapidly)
+    }
 
     // 基于相似度对账号名称进行分组
     // threshold: 阈值
     // mode: 效率档位,该值越高,效率越高,但结果会遗漏部分数据
-    pub fn group_account_names_by_similarity(&self, threshold: &CSimilarityGroupingThreshold, mode: &EfficiencyMode) -> HashMap<usize, Vec<String>>{
+    // 根据分割粒度将数据分割成若干数据块，并分别交由子线程处理,最后进行数据汇总
+    // 设置合理的分割粒度可以在保证准确性的基础上提高运算效率
+    fn group_account_names_by_similarity(&self, threshold: &mut CSimilarityGroupingThreshold, mode: &EfficiencyMode) -> HashMap<usize, Vec<String>>{
         let group_index_map: HashMap<usize, Vec<usize>>;
-
-        // 根据分割粒度将数据分割成若干数据块，并分别交由子线程处理,最后进行数据汇总
-        // 设置合理的分割粒度可以在保证准确性的基础上提高运算效率
-
+        if threshold.threshold_sim > 1.0{
+            threshold.threshold_sim = 1.0;
+        }
         // 数据量较大，需要采用 group_massive_accounts
         if self.data_vec_size >= *DEFAULT_MASSIVE_DATA_THRETHOLD{
             group_index_map = self.group_massive_accounts(&(0..self.data_vec_size).collect_vec(), threshold, *DEFAULT_GROUP_GRANULARITY, mode);
@@ -345,21 +407,26 @@ impl<'a> CAccountNameAnaVec<'a>{
 
 #[cfg(test)]
 mod tests {
+    extern crate serde_json;
+
     use std::fs;
     use super::*;
+
     #[test]
     fn it_works() {
 
-        let mut account_vec: Vec<&str> = Vec::new();  // 存储账号名
-        let account_list = fs::read_to_string(".\\test_data\\test_account_list.txt").unwrap();  // 测试25847条数据
-        for account_name in account_list.lines(){
-            account_vec.push(&account_name);
-        }
-        let ana = CAccountNameAnaVec::new(&account_vec);
-        let group_res = ana.group_account_names_by_similarity(&CSimilarityGroupingThreshold::default().set_threshold_sim(0.82).set_threshold_group_members(5), &EfficiencyMode::Quickly);
-        for index in 0..group_res.len(){
-            println!("{}-{:?}", index, group_res[&index])
-        }
+        // let mut account_vec: Vec<&str> = Vec::new();  // 存储账号名
+        // let account_list = fs::read_to_string(".\\test_data\\test_account_list.txt").unwrap();  // 测试25847条数据
+        // for account_name in account_list.lines(){
+        //     account_vec.push(&account_name);
+        // }
+        // let ana = CAccountNameAnaVec::new(&account_vec);
+        // for item in ana.to_vec(){
+        //     println!("{}", &item);
+        // }
+        // let group_res = ana.group_account_names_by_similarity(&CSimilarityGroupingThreshold::default().set_threshold_sim(0.82).set_threshold_group_members(5), &EfficiencyMode::Quickly);
+        // println!("{}", serde_json::to_string_pretty(&serde_json::json!(&group_res)).unwrap());
+        // fs::write(".\\test_data\\result\\result__5__0_85.txt", serde_json::to_string_pretty(&serde_json::json!(&group_res)).unwrap());
 
         // let mut account_vec: Vec<&str> = Vec::new();  // 存储账号名
         // let account_list = fs::read_to_string(".\\test_data\\test_massive_account_list.txt").unwrap();  // 大量数据测试，866411个去重账号
@@ -367,19 +434,16 @@ mod tests {
         //     account_vec.push(&account_name);
         // }
         // let ana = CAccountNameAnaVec::new(&account_vec);
-        // let group_res = ana.group_account_names_by_similarity(&CSimilarityGroupingThreshold::default().set_threshold_group_members(5), &EfficiencyMode::Rapidly);
-        // for index in 0..group_res.len(){
-        //     println!("{}-{:?}", index, group_res[&index])
-        // }
+        // let group_res = ana.group_account_names_by_similarity(&CSimilarityGroupingThreshold::default().set_threshold_sim(0.82).set_threshold_group_members(10), &EfficiencyMode::Rapidly);
+        // // println!("{}", serde_json::to_string_pretty(&serde_json::json!(&group_res)).unwrap());
+        // fs::write(".\\test_data\\result\\result_massive__10__0_82.txt", serde_json::to_string_pretty(&serde_json::json!(&group_res)).unwrap());
+
 
         // let vec_obj = vec!["a1f6", "aa11ff66", "b2c", "a1f55", "1"];
         // let tmp = CAccountNameAnaVec::new(&vec_obj);
-        // let _res= tmp.group_account_names_by_similarity(&CSimilarityGroupingThreshold::default(), &EfficiencyMode::Accurately);
+        // let _res= tmp.group_account_names_by_similarity(&CSimilarityGroupingThreshold { threshold_sim: 0.856, threshold_group_members: 1 }, &EfficiencyMode::Accurately);
         // for item in _res.iter(){
         //     println!("{}-{:?}", item.0, item.1)
         // }
-
-        // println!("{}", _res.keys().into_iter().map(|&x| x).collect_vec().len());
-
     }
 }
